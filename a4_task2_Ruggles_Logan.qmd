@@ -1,0 +1,267 @@
+---
+title: "Ass4.2: Agglomerative Hierarchical Clustering"
+subtitle: "ESM 244 Data Analysis"
+author: "Logan Ruggles"
+format: 
+  html:
+    code-fold: true
+    embed-resources: true
+    number-sections: true
+    toc: true
+editor: visual
+execute: 
+  echo: true #so code folds
+  message: false
+  warning: false
+theme: minty
+---
+
+# Overview
+
+
+
+## Purpose
+
+Use hierarchial clustering by complete linkage to create dendrogram showing multivariate clustering for water chemistry by site.
+
+Make df with single summary row per site (based on means from all observations at that site), then calculate Euclidean distance, perform complete linkage aggplomerative hierarchial clustering
+
+## Data
+
+Stream chemistry in the Santa Barbara Coastal drainage area (LTER). 2000 to present. summarize dataset. 
+
+Using registered stations
+
+Variables:
+site code:
+NH4_uM:
+NO3_uM:
+PO4_uM:
+tdn_uM:
+tdp_uM:
+tpc_uM:
+tpn_uM: total particulate nitrogen
+tpp_uM: total particulate phosphorus
+tss_mgperL: mg/L
+spec_cond_uSpercm
+
+Data Source: Santa Barbara Coastal LTER and J. Melack. 2019. SBC LTER: Land: Stream chemistry in the Santa Barbara Coastal drainage area, ongoing since 2000 ver 16. Environmental Data Initiative. https://doi.org/10.6073/pasta/67a558a24ceed9a0a5bf5e46ab841174.
+
+## Pseudocode
+
+-   convert -999 to NA (see documentation for read_csv)
+-   note many NAs, account for them with listwise deletion (drops any obs that doesn't have complete data) before summarizing; summarizing (with na.rm=TRUE) then dropping resulting NA rows; or dropping columns with lots of NAs. ID columns with losts of NAs (\>50%, use summary) and drop. Either listwise deletion or summarizing resulting dataset after excluding low-info variables
+-   PROFESSIONAL DENDROGRAM with caption. optional: rerun dendrogram using single linkage method and include tanglegram additionally to show how diff linkage changes the clustering
+
+# Code
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(here)
+library(dplyr)
+library(lubridate)
+library(ggfortify) # For PCA biplot
+
+library(NbClust)
+library(cluster)
+library(factoextra)
+library(dendextend)
+library(ggdendro)
+
+library(patchwork)
+library(cowplot)
+
+#matrix?
+library(purrr)
+library(tidymodels)
+library(broom)
+library(kableExtra)
+library(Metrics)
+```
+
+```{r}
+chem_df <- read_csv(here('chem.csv'),
+                    na = '-999') %>% 
+  janitor::clean_names()
+
+#summary(chem_df)
+#19,390 obs, 10/23/2000 to 7/28/2018
+
+n_distinct(chem_df$site_code) # 13 site codes
+```
+summary table shows 14K+ NAs for tpc, tpn, tpp, tss, which is majority of 19K observations. Assume not outcome of interest and not strong predictors, drop
+remove NAs
+
+Variable deletion:
+```{r}
+chem_NA <- chem_df %>% 
+  select(-c(tpc_u_m, tpn_u_m, tpp_u_m, tss_mgper_liter))
+
+n_distinct(chem_NA$site_code) #13 sites
+```
+for rest, listwise or pairwise deletion
+can we impute missing values dissolved N/P less NAs than tp N/P. Are particulate N/P correlated with other variables?
+
+Do they want imputation for N/P?
+
+Pairwise deletion (do nothing?): run analysis based on known variables, drop unknown variables(ex: mean value by site). average will have lower statistical sig but get more data by not removing sites. but can't see means with NAs
+
+Listwise deletion (drop missing obs before analysis):
+```{r}
+chem_no_NA <- chem_df %>% 
+  select(-c(tpc_u_m, tpn_u_m, tpp_u_m, tss_mgper_liter)) %>% 
+  drop_na()
+
+n_distinct(chem_no_NA$site_code) #6 sites
+```
+going forward with no_NA so can see mean
+
+## Exploratory Visualization
+
+Make df with single summary row per site (based on means from all observations at that site)
+Using wide df, group by site code, mean
+
+```{r}
+# mean of chemical loads for 6 variables at 13 sites
+avg_13_no_NA <- chem_no_NA %>% 
+  group_by(site_code) %>% 
+  summarize(across(where(is.numeric), mean)) %>% 
+  rename_with( ~ paste0(.x, "_avg")) # also renames site_code
+```
+
+```{r}
+# would rather do patchwork or facetwrap
+
+avg_long <- avg_13_no_NA %>%
+   pivot_longer(cols = -site_code_avg)
+
+ggplot(avg_long, aes(x=site_code_avg, y=value, color=name)) + 
+  geom_point(position = position_jitter(width=0.3, height=0.2)) +
+  labs(x = "Chemical",
+       title = "Mean Chemical Measurement by Site",
+       y = "Amount (mg/L)") + 
+  theme_minimal() + 
+  theme(legend.position="bottom")
+```
+Clusters?
+Idk if this is right
+
+```{r}
+# ggplot(seeds_df) +
+#   geom_point(aes(x = a, y = asym, color = c, shape = variety),
+#              size = 3, alpha = 0.7)
+# 
+# # try other variations: 
+# ggplot(seeds_df) +
+#   geom_point(aes(x = l_g, y = w_k, color = asym, shape = variety),
+#              size = 3, alpha = 0.7)
+```
+
+then calculate Euclidean distance
+
+```{r}
+# Scale the numeric variables (columns 2-7)
+chem_scaled <- avg_13_no_NA %>% 
+  select(2:7) %>% 
+  scale()
+
+summary(chem_scaled)
+
+# Update to add rownames (country name) from wb_ghg_20
+rownames(chem_scaled) <- avg_13_no_NA$name 
+#####should I be using the pivot longer one with the names column??
+
+# Check the outcome with View(wb_scaled) - see that the rownames are now the country name (this is useful for visualizing)
+# end with simplified scaled version of numeric variables, with rownames containing county name
+
+# Compute dissimilarity values (Euclidean distances):
+chem_euc_distance <- dist(chem_scaled, method = "euclidean")
+
+chem_euc_distance
+
+```
+
+perform complete linkage aggplomerative hierarchial clustering
+
+```{r}
+# Hierarchical clustering (complete linkage)
+# uses euc_dist matrix and specified linkage
+chem_hc_complete <- hclust(chem_euc_distance, method = "complete" ) 
+#complete: clusters merged by smallest max dist by 2 obs in distinct clusters
+#single: merged by smallest dist by obs in separate clusters
+#avg: avg dist btwn clusters then merges them
+
+# Plot it (base plot):
+plot(chem_hc_complete, cex = 0.6, hang = -1) #dendrogram output
+```
+# Sumary of Dendrogram Major Takeaways
+
+How similar sites are based on means of the 6 pollutants
+
+## Appendix
+
+```{r}
+# chem_long <- chem_no_NA %>%
+#   pivot_longer(cols = -c(site_code, timestamp_local)) %>% 
+#   select(-timestamp_local) #don't need timestamp for this analysis
+# 
+# ggplot(chem_long, aes(x = value)) +
+#    geom_histogram() +
+#    facet_grid(site_code ~ name, scales = 'free')
+
+# would prefer to do this with averages
+```
+
+```{r}
+# want to create a new df where take mean of each non-"site_code" variable for each site_code. Column 1 site_code, names specific_variable_avg, values avg of variable by site
+
+# make matrix to separate sites?
+
+# chem_avg <- chem_long %>% 
+#   group_by(site_code)
+# need to do a double group by basically
+
+# sites <- group_split(chem_avg)
+# 
+# names(sites) <- 1:length(sites)
+# 
+# for(i in 1:length(sites)){
+#   write_csv(sites[[i]], file = paste0(names(sites)[i], ".csv"))
+# }
+
+#Error in `[[.vctrs_list_of`(sites, i) : object 'i' not found
+```
+
+```{r}
+# RG01 <- chem_long %>% 
+#   filter(site_code == "RG01")
+# 
+# #group_by(site_code(name))
+# RG01_avg <- RG01 %>% 
+#   group_by(name) %>% 
+#   summarise(mean = mean(value))
+# 
+# #wider with _avg separated
+# RG01_avg_wide <- RG01_avg %>% 
+#   pivot_wider(names_from = name, values_from = mean) %>% 
+#   rename_with( ~ paste0(.x, "_avg"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

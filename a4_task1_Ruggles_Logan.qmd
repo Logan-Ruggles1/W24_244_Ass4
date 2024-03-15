@@ -1,0 +1,280 @@
+---
+title: "Ass4.1: Principal Components Analysis"
+subtitle: "Assignment 4.1: ESM 244 Data Analysis"
+author: "Logan Ruggles"
+format: 
+  html:
+    code-fold: true
+    embed-resources: true
+    number-sections: true
+    toc: true
+editor: visual
+execute: 
+  echo: true #so code folds
+  message: false
+  warning: false
+theme: minty
+---
+
+# Overview
+pic 
+
+## Purpose
+
+Perform PCA create biplot, interpret results
+
+See which happiness factors most explain happiness
+
+## Data
+
+World Population Review is an independent for-profit organization that visualizes demographic data. Since 2002, the World Happiness Report _. Dataset goes back to 2005 to 2022. Uses 6 categories pulled from Gallup World polling data. 6 factors don't impact total score based on average life evaluation, but represent the extent to which each variable contributes to explaining life evaluations.
+
+Life evaluation: average of 1000 surveys from each country, evaluate current life from 0 to 10 (Centril ladder), 3-year average and weighted
+
+Log GDP per capita: World Development Indicators (WDI) from World Bank, in terms of Purchasing Power Parity 
+Social support: Gallup World Poll "If you were in trouble, do you have relatives or friends you can count on to help you whenever you need them, or not?", binary Y1 N0, national avg
+Healthy life expectancy at birth: Global Health Observatory data from World Health Organization 
+Freedom to make life choices: "Are you satisfied or dissatisfied with your freedom to choose what you do with your life?" binary Y1 N0, national average 
+Generosity: residual of regressing national average, “Have you donated money to a charity in the past month?”, on log GDP per capita.
+Perception of corruption: average of binary responses “Is corruption widespread throughout the government in this country or not?” and “Is corruption widespread within businesses in this country or not?”. NAs - perception of business corruption used
+
+Based on data viz, dystopia and gdp may be most representative
+
+Bias in chosen variables possible, based on individual perception, unclear where discrimination for example factors in. Scores compared to a fictional rock-bottom countries, then combined into one score. Rankings take averages of data from 3 previous years. Northern European countries have tended to dominate the happiness rankings due to strong social support systems and high standards of living, while African countries are lowest. Finland most happy in 2023, Afghanistan least happy (low life expectancy rate and low GDP)
+
+Data Source: 
+
+Website: https://worldpopulationreview.com/country-rankings/happiest-countries-in-the-world
+Metadata https://worldhappiness.report/ed/2022/happiness-benevolence-and-trust-during-covid-19-and-beyond/#ranking-of-happiness-2019-2021
+
+cont_count https://github.com/datawookie/data-diaspora/blob/master/spatial/country-continent-codes.csv
+
+countries_sf https://hub.arcgis.com/datasets/esri::world-countries-generalized/explore
+
+## Pseudocode
+
+## Code
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(here)
+library(sf)
+library(lubridate)
+library(ggfortify) # For PCA biplot
+```
+
+# Visualizing Global Happiness Scores
+
+```{r}
+happy_scores <- read_csv(here('happy_scores.csv')) %>% 
+  janitor::clean_names() %>% 
+  select(c(country, happiest_countries_world_happiess_report_score2022)) %>% 
+  rename("score_2022" = "happiest_countries_world_happiess_report_score2022")
+
+countries_sf <- read_sf(here('countries', 'World_Countries_Generalized.shp')) %>% 
+  janitor::clean_names() %>% 
+  select(country, geometry)
+
+
+#st_crs(countries_sf) #3857
+countries_4326_sf <- st_transform(countries_sf, 4326) 
+#st_crs(countries_4326_sf) #WGS84
+```
+
+```{r}
+#| fig-cap: "World Happiness Scores (2022)"
+
+country_score_sf <- full_join(countries_4326_sf, happy_scores, by="country")
+
+ggplot() + 
+  geom_sf(data = country_score_sf, aes(fill = score_2022), size = 1) + # size = border
+  scale_fill_gradientn(colors = c('darkorchid4', 'chocolate1')) +
+  theme_void() +
+  labs(fill = 'Happiness Score (2022)')
+## ERROR: WANT 3857 PROJECTION
+```
+
+# PCA Code
+
+* professional biplot with caption, screeplot optional
+
+```{r}
+#data exploration
+happy_raw <- read_csv(here('happy.csv')) %>% 
+  janitor::clean_names() %>% 
+  mutate(year = as.factor(year)) # so year in its own column in happy_long
+
+count_cont_df <- read_csv(here("country_continent.csv")) %>% 
+  janitor::clean_names() %>% 
+  select(country, continent) %>% 
+  mutate(country = str_trim(str_remove(country, ",.+|\\(.+"))) # comma OR (|) front parentheses [\\( so not confused ofr coding parentheses] and make everything after it blank (periods for everything after)
+
+# count_cont_clean_df <- count_cont_df %>% 
+#   mutate(country = as.factor(country)) %>% # does making a factor make it work?
+#   mutate(continent = as.factor(continent)) %>% 
+#   mutate(country = str_trim(str_remove(country, ",.+|\\(.+"))) # comma OR (|) front parentheses [\\( so not confused ofr coding parentheses] and make everything after it blank (periods for everything after)
+
+#summary(happy_raw)
+#most NAs for perception of corruption
+  
+# happy_long <- happy_raw %>% 
+#  pivot_longer(names_to = 'name', values_to = 'value', where(is.numeric))
+```
+
+```{r}
+# ggplot(happy_long, aes(x=value)) +
+#   geom_histogram() + 
+#   facet_wrap(~ name, scales = "free")
+
+# skew: freedom, life exp, gdp, neg effect, perceptions, social
+# more even: generosity, life ladder, pos
+```
+MAKE PURTY
+
+```{r}
+# select target variables, for year 2022, drop rows with NAs
+
+happy_2022 <- happy_raw %>% #2199 obs
+  select(-c(life_ladder, positive_affect, negative_affect)) %>% #6 variables, no NAs for these
+  filter(year == "2022") %>% #114 obs 
+  drop_na() #104 obs (10 dropped)
+
+##### ERRORRRRR
+happy_join <- left_join(happy_2022, count_cont_df, by=c("country_name"="country"))
+
+happy_anti <- anti_join(happy_2022, count_cont_df, by=c("country_name"="country")) # 10 countries (2 Congos) not brought over and NAs
+
+# duplicated(happy_join$country_name) #armenia, khazikstan and georgia repeat
+
+happy_join_clean <- happy_join %>% 
+  distinct(country_name, .keep_all = TRUE) %>% #removes repeats, 104, still missing 10
+  drop_na() #94
+```
+  
+```{r}
+#for facet wrap
+happy_long_2022 <- happy_2022 %>% 
+  pivot_longer(names_to = 'name', values_to = 'value', where(is.numeric))
+
+ggplot(happy_long_2022, aes(x=value)) +
+  geom_histogram() + 
+  facet_wrap(~ name, scales = "free")
+
+# generosity even, others left skewed
+```
+
+```{r}
+# rescale to mean 0 and sd 1
+happy_pca <- happy_join_clean %>% 
+  select(where(is.numeric)) %>% 
+  prcomp(scale = TRUE)
+```
+
+* `sdev` is the standard deviation (square root of explained variance captured by each principal component)
+* `rotation` is the translation of base variables to principal components (and vice versa)
+* `center` is the factor applied for centering of the variables
+* `scale` is the factor for rescaling of the variables
+* `x` is a dataframe of all observations transformed to their new values in PC1, 2, etc.
+
+```{r}
+# See the loadings (weighting for each principal component)
+happy_pca$rotation
+```
+What can we say about the contributions of these variables to PC1, PC2, and PC3?
+
+?? is it the ones closer together? or the one they most input into is their order? no cuz it's pieces of them
+
+## Biplot loadings by hand
+
+```{r}
+# plot raw data with sample of variables
+g1 <- ggplot() +
+  geom_point(data = happy_join_clean, aes(x = social_support, y = perceptions_of_corruption, color = continent)) +
+  scale_color_manual(values = c('red', 'orange', 'yellowgreen', 'cornflowerblue', 'purple', 'black')) +
+  theme_minimal()
+
+g2 <- ggplot() +
+  geom_point(data = happy_join_clean, aes(x = healthy_life_expectancy_at_birth, y=log_gdp_per_capita, color = continent)) +
+  scale_color_manual(values = c('red', 'orange', 'yellowgreen', 'cornflowerblue', 'purple', 'black')) +
+  theme_minimal()
+
+g3 <- ggplot() +
+  geom_point(data = happy_join_clean, aes(x = generosity, y = freedom_to_make_life_choices, color = continent)) +
+  scale_color_manual(values = c('red', 'orange', 'yellowgreen', 'cornflowerblue', 'purple', 'black')) +
+  theme_minimal()
+
+g1 + g2
+```
+
+hard way
+
+```{r}
+# loadings_df <- data.frame(hdi_pca$rotation) %>%
+happy_loadings_df <- data.frame(happy_pca$rotation * 8) %>% ### 8x multiplier is arbitrary, to extend the length of the arrows
+  mutate(axis = row.names(.))
+
+# want to plot axes and points on transformed coord sys (from x value)
+happy_new_pts_df <- data.frame(happy_pca$x)
+
+ggplot() +
+  geom_point(data = happy_new_pts_df, aes(x = PC1, y = PC2), 
+             color = 'blue') +
+  geom_segment(data = happy_loadings_df,
+               x = 0, y = 0, aes(xend = PC1, yend = PC2, group = axis),
+               arrow = arrow(length = unit(.25, 'cm'))) +
+  geom_text(data = happy_loadings_df,
+            aes(x = PC1, y = PC2, label = axis), vjust = 0, nudge_y = .01) +
+  theme_minimal()
+```
+social support, life expectancy, gdp all on same axis so similar. freedom to make life choices is opposite of perceptions of corruption. strangely generosity closely opposite of positive things and not grouped with them
+
+autoplot (uses pca to make biplot)
+
+``` {r}
+autoplot(happy_pca,
+     	data = happy_join_clean,
+     	loadings = TRUE,
+     	colour = 'continent',
+      	loadings.colour = "black",
+     	loadings.label.colour = "black",
+     	loadings.label.vjust = -0.5
+     	) +
+  scale_color_manual(values = c('red', 'orange', 'yellowgreen', 'cornflowerblue', 'purple', 'black')) +
+  theme_minimal()
+```
+
+## Summary of Biplot Major Takeaways
+
+blah blah
+
+Screeplot by hand
+
+```{r}
+# column for how much variance explains ea pt?
+# variance in sdev vector, SD explained by each PC
+
+sd_vec <- happy_pca$sdev
+var_vec <- sd_vec^2 ### standard deviation is sqrt of variance!
+pc_names <- colnames(happy_pca$rotation)
+
+happy_pct_expl_df <- data.frame(v = var_vec, #values
+                          pct_v = var_vec / sum(var_vec), #percent values
+                          pc = pc_names) %>% #principal components?
+  mutate(pct_lbl = paste0(round(pct_v*100, 1), '%')) #1 rounds to 1 decimal place, % puts a % at end
+
+ggplot(happy_pct_expl_df, aes(x = pc, y = v)) + #v = variance, pc = PC
+  geom_col() +
+  geom_text(aes(label = pct_lbl), vjust = 0, nudge_y = .002) + #puts label on top
+  labs(x = 'Principal component', y = 'Variance explained') +
+  theme_minimal()
+
+# PC1: some composite of variables in some amount, diff PCs weighted in diff amnt
+```
+Over half (52.9%) is explained by PC1, with PC2 also contributing a good amount (21.4%)
+
+
+
+
+
+
